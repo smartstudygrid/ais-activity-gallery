@@ -89,6 +89,7 @@ footer .serif{font-size:18px;color:#fff}
 .adm .btn{display:inline-block;margin:18px 6px 6px;padding:12px 22px;border-radius:99px;background:var(--gold);color:var(--deep);font-weight:600;cursor:pointer;font-size:15px}
 .adm .btn[disabled]{opacity:.35;pointer-events:none}.adm .btn.alt{background:rgba(255,255,255,.12);color:#fff}
 #sum{margin:18px auto 0;text-align:left;display:inline-block;color:#e8eefb;font-size:14px;line-height:1.9}
+#banner{background:#fff;border:1px solid var(--gold);border-radius:14px;padding:14px 18px;margin:0 auto 22px;max-width:640px;text-align:center;font-size:14px;line-height:1.6;box-shadow:0 6px 18px rgba(10,42,102,.08)}#banner a{color:var(--navy);font-weight:600}
 </style>
 </head>
 <body>
@@ -101,6 +102,7 @@ footer .serif{font-size:18px;color:#fff}
     <div class="wave"></div>
   </header>
   <main>
+    <div id="banner" hidden>📷 No photos detected yet. <b>Admin:</b> <a href="#admin">open Gallery Setup</a> and choose your photos folder once. Any file names will work.</div>
     <h2 class="sect">Choose a Grade</h2>
     <div class="grid" id="grid"></div>
   </main>
@@ -127,7 +129,7 @@ footer .serif{font-size:18px;color:#fff}
     <div class="tools">
       <button id="play">▶ Play slideshow</button>
       <span class="count" id="count"></span>
-      <a class="dl" id="dl" download>⬇ Download photo</a>
+      <button class="dl" id="dl">⬇ Download photo</button>
       <button id="fs">⛶ Full screen</button>
       <button id="vid">🎬 Download as video</button>
     </div>
@@ -147,6 +149,7 @@ footer .serif{font-size:18px;color:#fff}
     Photos are only read on this computer, nothing is uploaded.</p>
     <label class="btn" for="pick">1 · Choose photos folder</label>
     <input type="file" id="pick" webkitdirectory multiple hidden>
+    <button class="btn alt" id="preview" disabled>Preview gallery now</button>
     <button class="btn" id="bake" disabled>2 · Download updated index.html</button>
     <div id="sum"></div>
     <p style="margin-top:22px"><a href="#" style="color:var(--gold2)">← Back to the gallery</a></p>
@@ -166,6 +169,7 @@ const IMG_RE = /\.(jpe?g|jfif|png|webp|gif|avif|bmp|svg)$/i;
 const $ = id => document.getElementById(id);
 const data = {};          // grade -> [urls]
 let cur = 4, idx = 0, timer = null, anim = null;
+const NAMES = {}; let localMode = false;
 
 const probe = src => new Promise(r => { const i = new Image(); i.onload = () => r(true); i.onerror = () => r(false); i.src = src; });
 const nat = (a, b) => a.localeCompare(b, undefined, {numeric: true});
@@ -176,8 +180,17 @@ async function fromListing(g) {
     const res = await fetch(encodeURI(`Grade ${g}/`));
     if (!res.ok) return [];
     const html = await res.text();
-    const names = [...html.matchAll(/href="([^"?#]+)"/gi)].map(m => decodeURIComponent(m[1]).split('/').pop()).filter(n => IMG_RE.test(n));
+    const names = [...html.matchAll(/href=["']([^"'?#]+)["']/gi)].map(m => decodeURIComponent(m[1]).split('/').pop()).filter(n => IMG_RE.test(n));
     return [...new Set(names)].sort(nat).map(n => path(g, n));
+  } catch (e) { return []; }
+}
+async function fromGitHub(g) {
+  const h = location.hostname; if (!h.endsWith('.github.io')) return [];
+  const seg = location.pathname.split('/')[1], repo = seg && !/\.html?$/i.test(seg) ? seg : h;
+  try {
+    const r = await fetch(`https://api.github.com/repos/${h.split('.')[0]}/${repo}/contents/${encodeURIComponent('Grade ' + g)}`);
+    if (!r.ok) return [];
+    return (await r.json()).filter(x => x.type === 'file' && IMG_RE.test(x.name)).map(x => x.name).sort(nat).map(n => path(g, n));
   } catch (e) { return []; }
 }
 async function fromNumbers(g) {
@@ -196,8 +209,8 @@ function demo(g) {
 async function load(g) {
   if (location.hash === '#demo') return demo(g);
   if (MANIFEST[`Grade ${g}`]) return MANIFEST[`Grade ${g}`].map(f => path(g, f));
-  const l = await fromListing(g);
-  return l.length ? l : fromNumbers(g);
+  const l = await fromListing(g); if (l.length) return l;
+  const gh = await fromGitHub(g); return gh.length ? gh : fromNumbers(g);
 }
 
 /* ---------- home ---------- */
@@ -220,7 +233,6 @@ function show(i, instant) {
   const bg = $('bgimg'); const set = () => { m.src = src; bg.src = src; m.classList.remove('out'); bg.classList.remove('out'); };
   if (instant) set(); else { m.classList.add('out'); bg.classList.add('out'); setTimeout(set, 220); }
   $('count').textContent = `${idx + 1} / ${list.length}`;
-  const dl = $('dl'); dl.href = src; dl.setAttribute('download', decodeURIComponent(src.split('/').pop()).startsWith('data:') ? `Grade-${cur}-${idx + 1}.svg` : decodeURIComponent(src.split('/').pop()));
   [...$('thumbs').children].forEach((t, k) => t.classList.toggle('on', k === idx));
   const t = $('thumbs').children[idx]; if (t) t.scrollIntoView({block: 'nearest', inline: 'center', behavior: 'smooth'});
   const nx = new Image(); nx.src = list[(idx + 1) % list.length];
@@ -334,17 +346,39 @@ async function makeVideo() {
 }
 $('vid').onclick = makeVideo;
 
-let found = null;
+let found = null, localFiles = {};
+$('preview').onclick = () => {
+  GRADES.forEach(g => { if (localFiles['Grade ' + g]) data[g] = localFiles['Grade ' + g]; });
+  localMode = true; $('banner').hidden = true; location.hash = ''; renderGrid();
+};
+function banner() { $('banner').hidden = !(location.hash !== '#demo' && GRADES.every(g => !(data[g] && data[g].length))); }
+async function downloadCurrent() {
+  const src = (data[cur] || [])[idx]; if (!src) return;
+  const name = NAMES[src] || (src.startsWith('data:') ? `Grade-${cur}-photo-${idx + 1}.png` : decodeURIComponent(src.split('/').pop()));
+  const base = name.replace(/\.[^.]+$/, ''), isPng = /\.png$/i.test(name), isJpg = /\.jpe?g$/i.test(name);
+  const save = (href, fn) => { const a = document.createElement('a'); a.href = href; a.download = fn; document.body.appendChild(a); a.click(); a.remove(); };
+  if (isPng || isJpg) { save(src, base + (isPng ? '.png' : '.jpg')); return; }
+  try {
+    const im = await new Promise((ok, no) => { const i = new Image(); i.onload = () => ok(i); i.onerror = no; i.src = src; });
+    const c = document.createElement('canvas'); c.width = im.naturalWidth || 1600; c.height = im.naturalHeight || 1000;
+    const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height); x.drawImage(im, 0, 0, c.width, c.height);
+    c.toBlob(b => { if (!b) return save(src, name); const u = URL.createObjectURL(b); save(u, base + '.jpg'); setTimeout(() => URL.revokeObjectURL(u), 5000); }, 'image/jpeg', 0.95);
+  } catch (e) { save(src, name); }
+}
+$('dl').onclick = downloadCurrent;
 $('pick').onchange = e => {
-  const m = {};
+  const m = {}, fl = {};
   [...e.target.files].forEach(f => {
     const parts = (f.webkitRelativePath || '').split('/');
     const i = parts.findIndex(x => /^Grade \d+$/i.test(x));
     if (i < 0 || i !== parts.length - 2 || !IMG_RE.test(f.name)) return;
-    (m['Grade ' + parts[i].match(/\d+/)[0]] = m['Grade ' + parts[i].match(/\d+/)[0]] || []).push(f.name);
+    const key = 'Grade ' + parts[i].match(/\d+/)[0];
+    (m[key] = m[key] || []).push(f.name); (fl[key] = fl[key] || []).push(f);
   });
   Object.values(m).forEach(a => a.sort(nat));
-  found = m;
+  found = m; localFiles = {};
+  Object.keys(fl).forEach(k => { fl[k].sort((a, b) => nat(a.name, b.name)); localFiles[k] = fl[k].map(f => { const u = URL.createObjectURL(f); NAMES[u] = f.name; return u; }); });
+  $('preview').disabled = !Object.keys(m).length;
   const keys = GRADES.map(g => 'Grade ' + g);
   $('sum').innerHTML = Object.keys(m).length ? keys.map(k => `${m[k] ? '✅' : '⚪'} ${k}: ${m[k] ? m[k].length + ' photos' : 'no photos found'}`).join('<br>') : 'No Grade folders with images were found. Please choose the folder that contains <b>Grade 4</b>, <b>Grade 5</b> …';
   $('bake').disabled = !Object.keys(m).length;
@@ -358,7 +392,7 @@ $('bake').onclick = () => {
 };
 
 renderGrid();
-Promise.all(GRADES.map(async g => { data[g] = await load(g); renderGrid(); })).then(route);
+Promise.all(GRADES.map(async g => { const r = await load(g); if (!localMode) { data[g] = r; renderGrid(); } })).then(() => { if (!localMode) { banner(); route(); } });
 route();
 </script>
 </body>
