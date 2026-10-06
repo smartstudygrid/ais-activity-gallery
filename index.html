@@ -57,7 +57,7 @@ main{max-width:1120px;margin:-30px auto 0;padding:0 18px 60px;position:relative}
 .tabs button.on{background:var(--gold);color:var(--deep);font-weight:600}
 .stage{position:relative;max-width:1100px;margin:6px auto 0;padding:0 18px}
 .frame{position:relative;height:min(66vh,640px);background:rgba(0,0,0,.28);border-radius:20px;overflow:hidden;display:grid;place-items:center;box-shadow:0 20px 60px rgba(0,0,0,.4);touch-action:pan-y}
-.frame img#main{position:relative;z-index:1;width:100%;height:100%;object-fit:contain;transition:opacity .35s,transform .5s}
+.frame img#main{position:absolute;inset:0;z-index:1;width:100%;height:100%;object-fit:contain;transition:opacity .35s,transform .5s}
 .frame img#bgimg{position:absolute;inset:-30px;width:calc(100% + 60px);height:calc(100% + 60px);object-fit:cover;filter:blur(28px) brightness(.5);transition:opacity .35s}
 .frame img.out{opacity:0}
 .frame img#main.out{transform:scale(.98)}
@@ -90,6 +90,7 @@ footer .serif{font-size:18px;color:#fff}
 .adm .btn[disabled]{opacity:.35;pointer-events:none}.adm .btn.alt{background:rgba(255,255,255,.12);color:#fff}
 #sum{margin:18px auto 0;text-align:left;display:inline-block;color:#e8eefb;font-size:14px;line-height:1.9}
 #banner{background:#fff;border:1px solid var(--gold);border-radius:14px;padding:14px 18px;margin:0 auto 22px;max-width:640px;text-align:center;font-size:14px;line-height:1.6;box-shadow:0 6px 18px rgba(10,42,102,.08)}#banner a{color:var(--navy);font-weight:600}
+.mus{color:#cfdaf2;font-size:14px;display:flex;align-items:center;gap:6px;cursor:pointer}.mus input{accent-color:var(--gold)}
 </style>
 </head>
 <body>
@@ -132,6 +133,7 @@ footer .serif{font-size:18px;color:#fff}
       <button class="dl" id="dl">⬇ Download photo</button>
       <button id="fs">⛶ Full screen</button>
       <button id="vid">🎬 Download as video</button>
+      <label class="mus"><input type="checkbox" id="music" checked> 🎵 Soft music</label>
     </div>
     <div class="thumbs" id="thumbs"></div>
     <div class="note" id="note" hidden></div>
@@ -286,15 +288,47 @@ $('frame').addEventListener('touchstart', e => sx = e.touches[0].clientX, {passi
 $('frame').addEventListener('touchend', e => { if (sx === null) return; const d = e.changedTouches[0].clientX - sx; if (Math.abs(d) > 50) show(idx + (d < 0 ? 1 : -1)); sx = null; });
 window.addEventListener('hashchange', route);
 
+/* ---------- soft ambient music, generated in the browser (no audio files, no licensing) ---------- */
+function startMusic(ac, dest, secs) {
+  const t0 = ac.currentTime + 0.1, master = ac.createGain();
+  master.gain.setValueAtTime(0, t0); master.gain.linearRampToValueAtTime(0.9, t0 + 2.5);
+  master.gain.setValueAtTime(0.9, t0 + secs - 3); master.gain.linearRampToValueAtTime(0, t0 + secs);
+  const lp = ac.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 1500;
+  const len = Math.floor(ac.sampleRate * 2.8), ir = ac.createBuffer(2, len, ac.sampleRate);
+  for (let c = 0; c < 2; c++) { const d = ir.getChannelData(c); for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 2.5); }
+  const verb = ac.createConvolver(); verb.buffer = ir;
+  const wet = ac.createGain(), dry = ac.createGain(); wet.gain.value = 0.45; dry.gain.value = 0.7;
+  lp.connect(dry); lp.connect(verb); verb.connect(wet); dry.connect(master); wet.connect(master); master.connect(dest);
+  const pad = (f, at, dur, type, vol) => {
+    const o = ac.createOscillator(), g = ac.createGain(); o.type = type; o.frequency.value = f;
+    g.gain.setValueAtTime(0, at); g.gain.linearRampToValueAtTime(vol, at + 1.8); g.gain.setValueAtTime(vol, at + dur); g.gain.linearRampToValueAtTime(0, at + dur + 2.2);
+    o.connect(g); g.connect(lp); o.start(at); o.stop(at + dur + 2.4);
+  };
+  const pluck = (f, at) => {
+    const o = ac.createOscillator(), g = ac.createGain(); o.type = 'sine'; o.frequency.value = f;
+    g.gain.setValueAtTime(0.0001, at); g.gain.linearRampToValueAtTime(0.045, at + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, at + 2);
+    o.connect(g); g.connect(lp); o.start(at); o.stop(at + 2.1);
+  };
+  const chords = [[130.81, 164.81, 196, 246.94], [110, 130.81, 164.81, 196], [174.61, 220, 261.63, 329.63], [98, 123.47, 146.83, 164.81]];
+  const arp = [0, 2, 1, 3, 2, 1, 3, 2];
+  for (let k = 0; k * 6 < secs; k++) {
+    const ch = chords[k % 4], at = t0 + k * 6;
+    ch.forEach(f => { pad(f, at, 6, 'sine', 0.05); pad(f * 1.004, at, 6, 'triangle', 0.018); });
+    arp.forEach((n, j) => { if (k * 6 + j * 0.75 < secs - 2) pluck(ch[n] * 2, at + j * 0.75); });
+  }
+}
+
 /* ---------- slideshow video (recorded in the browser) ---------- */
 async function makeVideo() {
   const list = data[cur] || [], btn = $('vid');
   if (!list.length || btn.disabled) return;
-  const types = ['video/mp4;codecs=avc1.42E01E', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm'];
+  const types = ['video/mp4;codecs=avc1.42E01E,mp4a.40.2', 'video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm'];
   const mime = window.MediaRecorder && types.find(t => MediaRecorder.isTypeSupported(t));
   if (!mime) { alert('This browser cannot create videos. Please use a recent version of Chrome, Edge or Safari.'); return; }
   const ext = mime.startsWith('video/mp4') ? 'mp4' : 'webm';
   play(false);
+  let ac = null;
+  if ($('music').checked) { try { ac = new (window.AudioContext || window.webkitAudioContext)(); ac.resume(); } catch (e) { ac = null; } }
   const lbl = btn.textContent; btn.disabled = true; btn.textContent = 'Preparing video…';
   const W = 1280, H = 720, cv = document.createElement('canvas'); cv.width = W; cv.height = H;
   const ctx = cv.getContext('2d');
@@ -327,13 +361,15 @@ async function makeVideo() {
     if (u < FADE) { k ? slide(imgs[k - 1]) : intro(); ctx.globalAlpha = u / FADE; slide(imgs[k]); ctx.globalAlpha = 1; } else slide(imgs[k]);
   };
   try { frame(0); cv.toDataURL(); } catch (e) {
-    alert('The browser blocked video creation for these photos. Video download works when the gallery is opened from its website address, not directly from a file on the computer.'); done(); return;
+    alert('The browser blocked video creation for these photos. Video download works when the gallery is opened from its website address, not directly from a file on the computer.'); if (ac) ac.close(); done(); return;
   }
-  const rec = new MediaRecorder(cv.captureStream(30), {mimeType: mime, videoBitsPerSecond: 5000000}), chunks = [];
+  const vs = cv.captureStream(30);
+  if (ac) { const dest = ac.createMediaStreamDestination(); startMusic(ac, dest, total / 1000); dest.stream.getAudioTracks().forEach(t => vs.addTrack(t)); }
+  const rec = new MediaRecorder(vs, {mimeType: mime, videoBitsPerSecond: 5000000}), chunks = [];
   rec.ondataavailable = e => e.data.size && chunks.push(e.data);
   rec.onstop = () => {
     const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(chunks, {type: mime.split(';')[0]}));
-    a.download = `AIS-Grade-${cur}-Slideshow.${ext}`; a.click(); done();
+    a.download = `AIS-Grade-${cur}-Slideshow.${ext}`; a.click(); if (ac) ac.close(); done();
   };
   rec.start(); const t0 = performance.now();
   const tick = now => {
