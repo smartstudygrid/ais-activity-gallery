@@ -129,6 +129,7 @@ footer .serif{font-size:18px;color:#fff}
       <span class="count" id="count"></span>
       <a class="dl" id="dl" download>⬇ Download photo</a>
       <button id="fs">⛶ Full screen</button>
+      <button id="vid">🎬 Download as video</button>
     </div>
     <div class="thumbs" id="thumbs"></div>
     <div class="note" id="note" hidden></div>
@@ -272,6 +273,66 @@ let sx = null;
 $('frame').addEventListener('touchstart', e => sx = e.touches[0].clientX, {passive: true});
 $('frame').addEventListener('touchend', e => { if (sx === null) return; const d = e.changedTouches[0].clientX - sx; if (Math.abs(d) > 50) show(idx + (d < 0 ? 1 : -1)); sx = null; });
 window.addEventListener('hashchange', route);
+
+/* ---------- slideshow video (recorded in the browser) ---------- */
+async function makeVideo() {
+  const list = data[cur] || [], btn = $('vid');
+  if (!list.length || btn.disabled) return;
+  const types = ['video/mp4;codecs=avc1.42E01E', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm'];
+  const mime = window.MediaRecorder && types.find(t => MediaRecorder.isTypeSupported(t));
+  if (!mime) { alert('This browser cannot create videos. Please use a recent version of Chrome, Edge or Safari.'); return; }
+  const ext = mime.startsWith('video/mp4') ? 'mp4' : 'webm';
+  play(false);
+  const lbl = btn.textContent; btn.disabled = true; btn.textContent = 'Preparing video…';
+  const W = 1280, H = 720, cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+  const ctx = cv.getContext('2d');
+  const ld = src => new Promise(r => { const i = new Image(); i.onload = () => r(i); i.onerror = () => r(null); i.src = src; });
+  const imgs = (await Promise.all(list.map(ld))).filter(Boolean);
+  const logo = await ld(document.querySelector('.hero img').src);
+  const done = () => { btn.disabled = false; btn.textContent = lbl; };
+  const INTRO = 3000, SLIDE = 3500, FADE = 500, total = INTRO + imgs.length * SLIDE;
+  const fit = (im, cover) => { const k = (cover ? Math.max : Math.min)(W / im.width, H / im.height); const w = im.width * k, h = im.height * k; return [(W - w) / 2, (H - h) / 2, w, h]; };
+  const intro = () => {
+    const g = ctx.createLinearGradient(0, 0, W, H); g.addColorStop(0, '#061a42'); g.addColorStop(1, '#1b4a9c');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+    if (logo) ctx.drawImage(logo, W / 2 - 80, 110, 160, 160 * logo.height / logo.width);
+    ctx.textAlign = 'center'; ctx.fillStyle = '#fff'; ctx.font = '84px "Instrument Serif",Georgia,serif'; ctx.fillText('AIS Activity Gallery', W / 2, 410);
+    ctx.fillStyle = '#f0cf7a'; ctx.font = '600 28px Inter,Arial,sans-serif'; ctx.fillText('ENGLISH DEPT (BOYS SECTION)', W / 2, 466);
+    ctx.fillStyle = '#fff'; ctx.font = '56px "Instrument Serif",Georgia,serif'; ctx.fillText('Grade ' + cur, W / 2, 560);
+  };
+  const slide = im => {
+    ctx.fillStyle = '#061a42'; ctx.fillRect(0, 0, W, H);
+    ctx.save(); if ('filter' in ctx) ctx.filter = 'blur(26px) brightness(.5)'; ctx.drawImage(im, ...fit(im, true)); ctx.restore();
+    if (!('filter' in ctx)) { ctx.fillStyle = 'rgba(6,26,66,.75)'; ctx.fillRect(0, 0, W, H); }
+    ctx.drawImage(im, ...fit(im, false));
+    ctx.fillStyle = 'rgba(6,26,66,.55)'; ctx.fillRect(0, H - 46, W, 46);
+    ctx.textAlign = 'left'; ctx.fillStyle = '#f0cf7a'; ctx.font = '600 18px Inter,Arial,sans-serif'; ctx.fillText('AIS Activity Gallery · Grade ' + cur + ' · English Dept (Boys Section)', 20, H - 17);
+    if (logo) ctx.drawImage(logo, W - 70, H - 42, 36, 36 * logo.height / logo.width);
+  };
+  const frame = t => {
+    if (t < INTRO) return intro();
+    const k = Math.min(imgs.length - 1, Math.floor((t - INTRO) / SLIDE)), u = t - INTRO - k * SLIDE;
+    if (u < FADE) { k ? slide(imgs[k - 1]) : intro(); ctx.globalAlpha = u / FADE; slide(imgs[k]); ctx.globalAlpha = 1; } else slide(imgs[k]);
+  };
+  try { frame(0); cv.toDataURL(); } catch (e) {
+    alert('The browser blocked video creation for these photos. Video download works when the gallery is opened from its website address, not directly from a file on the computer.'); done(); return;
+  }
+  const rec = new MediaRecorder(cv.captureStream(30), {mimeType: mime, videoBitsPerSecond: 5000000}), chunks = [];
+  rec.ondataavailable = e => e.data.size && chunks.push(e.data);
+  rec.onstop = () => {
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(chunks, {type: mime.split(';')[0]}));
+    a.download = `AIS-Grade-${cur}-Slideshow.${ext}`; a.click(); done();
+  };
+  rec.start(); const t0 = performance.now();
+  const tick = now => {
+    const t = now - t0;
+    if (t >= total) { frame(total - 1); rec.stop(); return; }
+    frame(t); btn.textContent = `Creating video… ${Math.round(t / total * 100)}% (keep this tab open)`;
+    requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+}
+$('vid').onclick = makeVideo;
 
 let found = null;
 $('pick').onchange = e => {
